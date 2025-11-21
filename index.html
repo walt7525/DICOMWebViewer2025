@@ -164,12 +164,8 @@
         }
         
         /* 差异高亮颜色 */
-        /* freq-low: 只有该文件是此值 (差异最大) */
-        .freq-low { background-color: #ffcccc; } 
-        /* freq-medium: 少数文件是此值 (中等差异) */
-        .freq-medium { background-color: #ffe5e5; }
-        /* freq-high: 大部分文件是此值 (差异最小或无差异，无需标红) */
-        /* freq-high { background-color: white; } */
+        .freq-low { background-color: #ffcccc; } /* 只有该文件是此值 (差异最大) */
+        .freq-medium { background-color: #ffe5e5; } /* 少数文件是此值 (中等差异) */
         
         /* 特定列的宽度 */
         th:nth-child(1), td:nth-child(1) { /* Tag 列 */
@@ -178,7 +174,6 @@
         th:nth-child(2), td:nth-child(2) { /* Tag Name 列 */
             width: 180px;
         }
-        /* 关键修改 3: 新增 VR/VM 列的宽度 */
         th:nth-child(3), td:nth-child(3) { /* VR 列 */
             width: 40px; 
             text-align: center;
@@ -264,6 +259,7 @@
             showStatus('正在加载 Pyodide v0.29.0 核心环境...');
             
             // 关键修改 1：使用 indexURL "./" 指向当前目录，加载核心文件
+            // 确保文件 pyodide.asm.js, pyodide.asm.wasm 位于当前目录
             pyodide = await loadPyodide({
                  indexURL: "./" 
             });
@@ -273,7 +269,7 @@
             const micropip = pyodide.pyimport("micropip");
             
             showStatus('正在本地安装 pydicom (3.0.1)...');
-            // 关键修改 2：使用您本地的 whl 文件名
+            // 关键修改 2：使用您本地的 whl 文件名和路径
             await micropip.install('./pydicom-3.0.1-py3-none-any.whl'); 
             
             showStatus('工具环境 v0.29.0 加载完成！');
@@ -288,7 +284,8 @@
             
         } catch (error) {
             console.error("加载 Pyodide 或安装 pydicom 失败:", error);
-            showStatus(`加载失败: ${error.message}，请检查本地文件是否完整。`, true);
+            // 提示用户检查是否通过本地服务器运行
+            showStatus(`加载失败: ${error.message}。请确保通过 'http://' 地址运行，而不是直接双击。`, true);
         }
     }
     
@@ -421,12 +418,21 @@ parse_dicom_files()
             pyodide.globals.set('loadedFiles', loadedFiles);
 
             // 执行 Python 代码
-            const [parsed_data, errors] = await pyodide.runPythonAsync(parsePythonCode);
-            currentParsedData = parsed_data.toJs();
+            // 注意：Python 返回的是 PyProxy 对象，需要 .toJs() 转换
+            const pyResult = await pyodide.runPythonAsync(parsePythonCode);
+            const [parsed_data_py, errors_py] = pyResult.toJs();
             
-            if (errors && errors.length > 0) {
-                 showStatus(`解析完成，但存在 ${errors.length} 个错误。`, true);
-                 console.error("解析错误详情:", errors.toJs());
+            // 将 Python 的 Map 转换为 JS 的 Map 或 Object
+            const parsed_data_js = {};
+            parsed_data_py.forEach((value, key) => {
+                parsed_data_js[key] = value.toJs();
+            });
+            currentParsedData = parsed_data_js;
+
+
+            if (errors_py && errors_py.length > 0) {
+                 showStatus(`解析完成，但存在 ${errors_py.length} 个错误。`, true);
+                 console.error("解析错误详情:", errors_py.toJs());
             } else {
                  showStatus('文件解析成功，正在渲染表格...');
             }
@@ -464,15 +470,15 @@ parse_dicom_files()
             const fileInfo = currentParsedData[tag];
 
             filenames.forEach(filename => {
+                // 确保 N/A 也是一个可计数的差异值
                 const value = fileInfo[filename]?.value || 'N/A';
                 values[value] = (values[value] || 0) + 1;
             });
 
             tagValueFrequencies[tag] = {};
-            let maxFreq = 0;
             let numUniqueValues = Object.keys(values).length;
 
-            if (numUniqueValues > 1 || (numUniqueValues === 1 && values['N/A'] && values['N/A'] !== fileCount)) {
+            if (numUniqueValues > 1) {
                 differentTags.add(tag);
             }
 
@@ -486,11 +492,10 @@ parse_dicom_files()
                 } else {
                     tagValueFrequencies[tag][value] = 'high'; // 大部分出现，不标红
                 }
-                maxFreq = Math.max(maxFreq, count);
             }
         });
         
-        // --- 表头修改：添加 VR 和 VM ---
+        // --- 表格主体渲染 ---
         let html = '<table><thead><tr><th>Tag</th><th>Tag Name</th><th>VR</th><th>VM</th>'; 
         filenames.forEach(name => {
             html += `<th class="file-name-row">${name}</th>`;
@@ -501,19 +506,19 @@ parse_dicom_files()
 
         tagsToDisplay.forEach(tag => {
             const fileInfo = currentParsedData[tag];
-            // 获取任意一个文件的信息作为该 tag 的基准信息
+            // 获取 Tag 的通用信息 (VR/VM/Name)
             const firstFilename = Object.keys(fileInfo)[0];
             const baseInfo = fileInfo[firstFilename];
 
             const tagName = baseInfo?.name || 'Unknown';
-            const tagVR = baseInfo?.vr || 'UN';  // <--- 获取 VR
-            const tagVM = baseInfo?.vm || '1';   // <--- 获取 VM
+            const tagVR = baseInfo?.vr || 'UN';
+            const tagVM = baseInfo?.vm || '1';
             
-            // --- Tag 信息行：添加 VR 和 VM 单元格 ---
+            // Tag 信息行
             html += `<tr><td><code>${tag}</code></td>`;
             html += `<td class="tag-name-cell">${tagName}</td>`;
-            html += `<td style="text-align: center;">${tagVR}</td>`; // 新增 VR 单元格
-            html += `<td style="text-align: center;">${tagVM}</td>`; // 新增 VM 单元格
+            html += `<td style="text-align: center;">${tagVR}</td>`;
+            html += `<td style="text-align: center;">${tagVM}</td>`;
 
             filenames.forEach(filename => {
                 const valueObj = fileInfo[filename];
@@ -579,9 +584,11 @@ parse_dicom_files()
         tableContainer.innerHTML = '<p style="text-align: center; padding: 20px;">暂无数据，请先上传 DICOM 文件。</p>';
         updateFileListDisplay(); // 清空列表显示
         hideStatus();
-        hideSameBtn.disabled = true;
-        showAllBtn.disabled = true;
-        clearBtn.disabled = true;
+        // 禁用按钮，只有在 Pyodide 重新加载文件后才启用
+        // 注意：这里可以保持启用，因为 Pyodide 核心已加载
+        // hideSameBtn.disabled = true;
+        // showAllBtn.disabled = true;
+        // clearBtn.disabled = true;
     });
 
 </script>
