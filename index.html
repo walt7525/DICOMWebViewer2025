@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>叶子出品 DICOM Tag 查看器</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            padding: 20px;
+            background-color: #f5f5f5;
+            margin: 0; /* 移除默认边距 */
+        }
+        .container {
+            max-width: 100vw; /* 使用视口宽度 */
+            margin: 0; /* 移除容器默认居中边距 */
+            background-color: white;
+            border-radius: 0; /* 移除圆角以贴合屏幕 */
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px 0; /* 只保留上下内边距 */
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-top: 0; /* 紧贴顶部 */
+        }
+        #drop_zone {
+            border: 2px dashed #ccc;
+            border-radius: 4px;
+            padding: 40px;
+            text-align: center;
+            background-color: #fafafa;
+            margin: 20px auto; /* 上下外边距，左右自动居中 */
+            max-width: 800px; /* 限制拖拽区最大宽度 */
+            transition: border-color 0.3s;
+        }
+        #drop_zone.dragover {
+            border-color: #007bff;
+            background-color: #f0f8ff;
+        }
+        #controls {
+            margin: 20px auto; /* 上下外边距，左右自动居中 */
+            text-align: center;
+            max-width: 800px; /* 限制控制按钮最大宽度 */
+        }
+        button {
+            margin: 0 5px;
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin: 10px auto; /* 左右自动居中 */
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+            text-align: center;
+            max-width: 800px; /* 限制状态信息最大宽度 */
+            display: none; /* 默认隐藏 */
+        }
+        #status.show {
+            display: block; /* 有状态信息时显示 */
+        }
+        /* 新增：紧凑的已上传文件列表样式 */
+        #uploaded_files_container {
+            margin: 20px auto;
+            padding: 0 20px;
+            max-width: 800px;
+        }
+        #uploaded_files_list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex; /* 使用 flex 布局使其紧凑 */
+            flex-wrap: wrap; /* 允许换行 */
+            gap: 5px; /* 项目间距 */
+        }
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 4px 8px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+            font-size: 0.9em; /* 较小字体 */
+        }
+        .file-name {
+            margin-right: 5px; /* 文件名与按钮间距 */
+            word-break: break-all; /* 长文件名换行 */
+            max-width: 200px; /* 限制文件名最大宽度 */
+        }
+        .delete-btn-small {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 2px 6px;
+            cursor: pointer;
+            font-size: 0.8em;
+        }
+        .delete-btn-small:hover {
+            background-color: #c82333;
+        }
+        #table_container {
+            overflow-x: auto; /* 允许水平滚动 */
+            overflow-y: auto; /* 允许垂直滚动 */
+            max-height: 70vh; /* 限制表格容器最大高度，例如视口高度的 70% */
+            margin: 0 20px; /* 给表格容器左右留一些边距 */
+            border: 1px solid #ddd; /* 添加边框 */
+            border-radius: 4px;
+            background-color: white; /* 确保滚动区域背景色 */
+        }
+        table {
+            width: 100%; /* 表格宽度自适应内容 */
+            border-collapse: collapse;
+            table-layout: fixed; /* 固定列宽 */
+            min-width: 800px; /* 设置表格最小宽度，防止列宽过窄 */
+        }
+        /* 固定列宽 */
+        th, td {
+            width: 150px; /* 默认列宽 */
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+            vertical-align: top;
+            word-wrap: break-word; /* 允许长内容换行 */
+            max-height: 100px; /* 限制单元格最大高度 */
+            overflow-y: auto; /* 如果内容超出最大高度，显示滚动条 */
+        }
+        /* 特定列的宽度 */
+        th:nth-child(1), td:nth-child(1) { /* Tag 列 */
+            width: 100px; /* 较窄 */
+        }
+        th:nth-child(2), td:nth-child(2) { /* Tag Name 列 */
+            width: 200px; /* 较宽 */
+        }
+        /* 表头固定 */
+        thead th {
+            position: sticky;
+            top: 0;
+            z-index: 10; /* 确保表头在滚动时覆盖内容 */
+            background-color: #f2f2f2; /* 表头背景色 */
+        }
+        /* 表头中的文件名列 */
+        .file-name-row th {
+            background-color: #e6f3ff;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        /* 定义不同深浅的红色背景类 */
+        .freq-low { background-color: #ff9999 !important; }    /* 最红，频率最低 */
+        .freq-medium { background-color: #ffcccc !important; }  /* 中等红色 */
+        .freq-high { background-color: #ffe6e6 !important; }   /* 最浅的红，频率最高 */
+        .tag-name-cell {
+            font-style: italic; /* 用斜体区分名称 */
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>叶子出品 DICOM Tag 查看器</h1>
+
+    <div id="drop_zone">
+        <p>拖拽 DICOM 文件到此处 (支持多文件，无需 .dcm 扩展名)</p>
+        <p>--- 或者 ---</p>
+        <input type="file" id="file_input" multiple accept=".dcm,*/*">
+    </div>
+
+    <div id="controls">
+        <button id="hide_same_btn" disabled>隐藏相同 Tag</button>
+        <button id="show_all_btn" disabled>显示所有 Tag</button>
+        <button id="clear_btn" disabled>清空所有</button>
+    </div>
+
+    <!-- 新增：紧凑的已上传文件列表容器 -->
+    <div id="uploaded_files_container">
+        <h4>已上传文件 (点击 X 删除):</h4>
+        <ul id="uploaded_files_list"></ul>
+    </div>
+
+    <div id="status"></div>
+
+    <div id="table_container">
+        <!-- 表格将在这里动态生成 -->
+    </div>
+</div>
+
+<script type="text/javascript">
+    let pyodide = null;
+    let loadedFiles = new Map(); // 存储 {filename: fileContent} 的 Map
+    let currentParsedData = null; // 存储解析后的 {tag: {info: {filename: value, name}}} 结构
+    let hideSameTags = false; // 控制是否隐藏相同值的 tag
+
+    const dropZone = document.getElementById('drop_zone');
+    const fileInput = document.getElementById('file_input');
+    const hideSameBtn = document.getElementById('hide_same_btn');
+    const showAllBtn = document.getElementById('show_all_btn');
+    const clearBtn = document.getElementById('clear_btn');
+    const statusDiv = document.getElementById('status');
+    const tableContainer = document.getElementById('table_container');
+    // 新增元素
+    const uploadedFilesList = document.getElementById('uploaded_files_list');
+
+    // 显示状态信息
+    function showStatus(message, isError = false) {
+        statusDiv.textContent = message;
+        statusDiv.className = 'show';
+        if (isError) {
+            statusDiv.style.backgroundColor = '#ffe6e6';
+            statusDiv.style.color = '#cc0000';
+        } else {
+            statusDiv.style.backgroundColor = '#e9ecef';
+            statusDiv.style.color = 'inherit';
+        }
+        // 3秒后自动隐藏
+        setTimeout(() => {
+            statusDiv.className = '';
+        }, 3000);
+    }
+
+    // 隐藏状态信息
+    function hideStatus() {
+        statusDiv.className = '';
+    }
+
+    // 初始化 Pyodide
+    async function main() {
+        try {
+            statusDiv.textContent = '正在加载 Pyodide...';
+            statusDiv.className = 'show';
+            pyodide = await loadPyodide();
+            statusDiv.textContent = '正在安装 pydicom...';
+            await pyodide.loadPackage("micropip");
+            const micropip = pyodide.pyimport("micropip");
+            await micropip.install('pydicom');
+            statusDiv.textContent = 'Pyodide 和 pydicom 加载完成！';
+            setTimeout(() => {
+                statusDiv.className = '';
+            }, 2000);
+            console.log('Pyodide 加载并配置完成');
+        } catch (error) {
+            console.error("加载 Pyodide 或安装 pydicom 失败:", error);
+            showStatus(`加载失败: ${error.message}`, true);
+        }
+    }
+
+    // 解析 DICOM 文件的 Python 代码
+    // 现在同时提取 tag 的值和名称
+    const parsePythonCode = `
+import pydicom
+import io
+
+def parse_dicom_files():
+    parsed_data = {} # 结构: {tag_str: {filename: {'value': val, 'name': name}}}
+    errors = []
+    for filename, file_content_memoryview in loadedFiles.to_py().items():
+        try:
+            file_bytes = bytes(file_content_memoryview)
+            file_stream = io.BytesIO(file_bytes)
+            ds = pydicom.dcmread(file_stream, stop_before_pixels=True)
+            for elem in ds.iterall():
+                tag_str = str(elem.tag)
+                if tag_str not in parsed_data: # 修复语法错误，补充完整
+                    parsed_data[tag_str] = {}
+                # 获取 tag 的值和名称
+                value_str = str(elem.value)
+                name_str = elem.name or 'Unknown' # 如果没有名称，则显示 'Unknown'
+                parsed_data[tag_str][filename] = {'value': value_str, 'name': name_str}
+        except Exception as e:
+            errors.append(f"解析文件 {filename} 时出错: {str(e)}")
+    return parsed_data, errors
+
+parse_dicom_files()
+    `;
+
+    // 处理文件上传
+    async function handleFiles(files) {
+        if (!pyodide) {
+            showStatus('Pyodide 尚未加载完成，请稍后再试。', true);
+            return;
+        }
+
+        if (files.length === 0) return;
+
+        // 读取所有文件内容
+        const promises = Array.from(files).map(file => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    // 直接将 ArrayBuffer 传递给 Pyodide
+                    loadedFiles.set(file.name, event.target.result);
+                    resolve();
+                };
+                reader.onerror = () => reject(new Error(`读取文件 ${file.name} 失败`));
+                reader.readAsArrayBuffer(file);
+            });
+        });
+
+        try {
+            await Promise.all(promises);
+            // 更新文件列表显示
+            updateFileListDisplay();
+            showStatus(`已加载 ${loadedFiles.size} 个文件，正在解析...`);
+            console.log(`已加载 ${loadedFiles.size} 个文件到内存`);
+            
+            // 将 JavaScript Map 'loadedFiles' 设置为 Pyodide 的全局变量
+            pyodide.globals.set('loadedFiles', loadedFiles);
+            
+            // 运行 Python 解析代码
+            const result = await pyodide.runPythonAsync(parsePythonCode);
+            const [parsed_data, errors] = result.toJs();
+            
+            if (errors && errors.length > 0) {
+                errors.forEach(err => console.warn(err));
+                // 可以选择性地向用户显示非致命错误
+                // showStatus(`解析过程中出现警告: ${errors[0]}`, true); // 只显示第一个
+            }
+
+            currentParsedData = parsed_data;
+            console.log('解析完成，数据结构:', currentParsedData);
+            showStatus(`解析完成，共找到 ${Object.keys(parsed_data).length} 个不同的 Tag。`);
+            renderTable();
+            
+            // 启用控制按钮
+            hideSameBtn.disabled = false;
+            showAllBtn.disabled = false;
+            clearBtn.disabled = false; // 解析成功后启用清空按钮
+
+        } catch (error) {
+            console.error("解析文件时出错:", error);
+            showStatus(`解析失败: ${error.message}`, true);
+        }
+    }
+
+    // 更新已上传文件列表的显示
+    function updateFileListDisplay() {
+        uploadedFilesList.innerHTML = ''; // 清空列表
+
+        loadedFiles.forEach((content, filename) => {
+            const listItem = document.createElement('li');
+            listItem.className = 'file-item';
+
+            const fileNameSpan = document.createElement('span');
+            fileNameSpan.className = 'file-name';
+            fileNameSpan.textContent = filename;
+
+            const deleteButton = document.createElement('button');
+            deleteButton.className = 'delete-btn-small';
+            deleteButton.textContent = 'X'; // 使用 X 代替 "删除"
+            deleteButton.title = `删除 ${filename}`; // 添加提示
+            // 为删除按钮绑定点击事件，传入文件名
+            deleteButton.onclick = () => deleteFile(filename);
+
+            listItem.appendChild(fileNameSpan);
+            listItem.appendChild(deleteButton);
+            uploadedFilesList.appendChild(listItem);
+        });
+
+        // 根据是否有文件来决定是否显示容器标题
+        const container = document.getElementById('uploaded_files_container');
+        if (loadedFiles.size > 0) {
+            container.style.display = 'block';
+        } else {
+            container.style.display = 'none';
+        }
+    }
+
+    // 删除单个文件
+    function deleteFile(filename) {
+        console.log(`删除文件: ${filename}`);
+        loadedFiles.delete(filename);
+        updateFileListDisplay(); // 更新列表显示
+
+        if (loadedFiles.size === 0) {
+            // 如果删除后没有文件了，清空表格和状态
+            currentParsedData = null;
+            tableContainer.innerHTML = '<p style="text-align: center; padding: 20px;">暂无数据，请先上传 DICOM 文件。</p>';
+            hideStatus();
+            hideSameBtn.disabled = true;
+            showAllBtn.disabled = true;
+            clearBtn.disabled = true; // 没有文件时禁用清空按钮
+        } else {
+            // 如果还有文件，重新解析
+            // 重新设置 Pyodide 全局变量
+            pyodide.globals.set('loadedFiles', loadedFiles);
+            // 重新运行解析和渲染
+            pyodide.runPythonAsync(parsePythonCode).then(result => {
+                const [parsed_data, errors] = result.toJs();
+                if (errors && errors.length > 0) {
+                    errors.forEach(err => console.warn(err));
+                }
+                currentParsedData = parsed_data;
+                console.log('重新解析完成，数据结构:', currentParsedData);
+                renderTable();
+            }).catch(error => {
+                console.error("重新解析文件时出错:", error);
+                showStatus(`重新解析失败: ${error.message}`, true);
+            });
+        }
+    }
+
+    // 渲染表格
+    function renderTable() {
+        if (!currentParsedData || Object.keys(currentParsedData).length === 0) {
+            tableContainer.innerHTML = '<p style="text-align: center; padding: 20px;">暂无数据，请先上传 DICOM 文件。</p>';
+            return;
+        }
+
+        const filenames = Array.from(loadedFiles.keys());
+        const allTags = Object.keys(currentParsedData);
+
+        let html = '<table><thead><tr><th>Tag</th><th>Tag Name</th>'; // 添加 "Tag Name" 表头
+        filenames.forEach(name => {
+            html += `<th class="file-name-row">${name}</th>`;
+        });
+        html += '</tr></thead><tbody>';
+
+        // 计算每个 tag 的值频率，并确定每个值的频率等级
+        const tagValueFrequencies = {};
+        allTags.forEach(tag => {
+            const fileInfo = currentParsedData[tag];
+            const values = Object.values(fileInfo).map(info => info.value);
+            const valueCounts = {};
+            values.forEach(val => {
+                valueCounts[val] = (valueCounts[val] || 0) + 1;
+            });
+
+            // 计算每个值的频率等级 (低/中/高)
+            const frequencies = {};
+            for (const [value, count] of Object.entries(valueCounts)) {
+                if (count === 1) {
+                    frequencies[value] = 'low';
+                } else if (count === 2) {
+                    frequencies[value] = 'medium';
+                } else {
+                    frequencies[value] = 'high';
+                }
+            }
+
+            tagValueFrequencies[tag] = frequencies;
+        });
+
+        // 过滤掉相同的 tag（如果设置了隐藏）
+        // 这里需要重新判断哪些 tag 是“相同”的：即其所有值的频率都是 'high' (意味着所有值都一样)
+        const differentTags = new Set();
+        allTags.forEach(tag => {
+            const frequencies = tagValueFrequencies[tag];
+            const allHighFreq = Object.values(frequencies).every(freq => freq === 'high');
+            if (!allHighFreq) {
+                differentTags.add(tag);
+            }
+        });
+
+        const tagsToDisplay = hideSameTags ? Array.from(differentTags) : allTags;
+
+        tagsToDisplay.forEach(tag => {
+            const fileInfo = currentParsedData[tag];
+            // 获取任意一个文件的名称作为该 tag 的名称（通常所有文件的名称是相同的）
+            const firstFilename = Object.keys(fileInfo)[0];
+            const tagName = fileInfo[firstFilename]?.name || 'Unknown';
+            
+            html += `<tr><td><code>${tag}</code></td><td class="tag-name-cell">${tagName}</td>`;
+            filenames.forEach(filename => {
+                const valueObj = fileInfo[filename];
+                const value = valueObj ? valueObj.value : 'N/A';
+                
+                // 获取该值的频率等级
+                const frequencyLevel = tagValueFrequencies[tag][value] || 'high'; // 默认为 high (如果值不存在于频率映射中)
+                
+                // 根据频率等级确定 CSS 类
+                let cssClass = '';
+                if (frequencyLevel === 'low') {
+                    cssClass = ' class="freq-low"';
+                } else if (frequencyLevel === 'medium') {
+                    cssClass = ' class="freq-medium"';
+                } else if (frequencyLevel === 'high') {
+                    cssClass = ' class="freq-high"';
+                }
+                
+                html += `<td${cssClass}>${value}</td>`;
+            });
+            html += '</tr>';
+        });
+
+        html += '</tbody></table>';
+        tableContainer.innerHTML = html;
+    }
+
+    // 事件监听器
+    dropZone.addEventListener('dragover', (event) => {
+        event.preventDefault(); // 必须，否则 drop 事件不会触发
+        dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', (event) => {
+        event.preventDefault();
+        dropZone.classList.remove('dragover');
+        const files = event.dataTransfer.files;
+        handleFiles(files);
+    });
+
+    fileInput.addEventListener('change', (event) => {
+        const files = event.target.files;
+        handleFiles(files);
+    });
+
+    hideSameBtn.addEventListener('click', () => {
+        hideSameTags = true;
+        renderTable();
+    });
+
+    showAllBtn.addEventListener('click', () => {
+        hideSameTags = false;
+        renderTable();
+    });
+
+    clearBtn.addEventListener('click', () => {
+        loadedFiles.clear();
+        currentParsedData = null;
+        tableContainer.innerHTML = '<p style="text-align: center; padding: 20px;">暂无数据，请先上传 DICOM 文件。</p>';
+        updateFileListDisplay(); // 清空列表显示
+        hideStatus();
+        hideSameBtn.disabled = true;
+        showAllBtn.disabled = true;
+        clearBtn.disabled = true;
+    });
+
+    // 启动应用
+    main();
+</script>
+
+</body>
+</html>
